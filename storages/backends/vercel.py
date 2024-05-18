@@ -2,6 +2,7 @@ from storages.base import BaseStorage
 from django.core.files.base import File
 from django.core.exceptions import SuspiciousOperation
 from storages.utils import clean_name, safe_join
+from .vercel_storage import blob
 
 class VercelStorage(BaseStorage):
     def __init__(self, **settings):
