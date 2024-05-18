@@ -12,28 +12,28 @@ class VercelStorage(BaseStorage):
 
     def _open(self, name, mode='rb'):
         # Open a file from Vercel storage
-        raise NotImplementedError("This method must be overridden.")
+        return blob.open_blob(name, mode)
 
     def _save(self, name, content):
         # Save a file to Vercel storage
-        raise NotImplementedError("This method must be overridden.")
+        return blob.save_blob(name, content)
 
     def delete(self, name):
         # Delete a file from Vercel storage
-        raise NotImplementedError("This method must be overridden.")
+        blob.delete_blob(name)
 
     def exists(self, name):
         # Check if a file exists in Vercel storage
-        raise NotImplementedError("This method must be overridden.")
+        return blob.blob_exists(name)
 
     def listdir(self, path):
         # List directories and files under a path in Vercel storage
-        raise NotImplementedError("This method must be overridden.")
+        return blob.list_blobs(path)
 
     def size(self, name):
         # Get the size of a file in Vercel storage
-        raise NotImplementedError("This method must be overridden.")
+        return blob.get_blob_size(name)
 
     def url(self, name):
         # Get the URL of a file in Vercel storage
-        raise NotImplementedError("This method must be overridden.")
+        return blob.get_blob_url(name)
