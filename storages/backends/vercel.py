@@ -1,5 +1,7 @@
 import io
-from typing import cast, Dict, List
+from typing import Literal
+from tempfile import SpooledTemporaryFile
+
 import requests
 from storages.base import BaseStorage
 from django.core.files.base import File
@@ -13,14 +15,14 @@ class VercelStorageException(Exception):
 
 
 class VercelStorageContent:
-    url = str
-    pathname = str
-    size = int
-    uploadedAt = str
-    contentDisposition = str
-    contentType = str
+    url: str
+    pathname: str
+    size: int
+    uploadedAt: str
+    contentDisposition: str
+    contentType: str
 
-    def __init__(self, data_dict):
+    def __init__(self, data_dict: dict):
         self.url = data_dict.get("url", "")
         self.pathname = data_dict.get("pathname", "")
         self.size = data_dict.get("size", 0)
@@ -55,17 +57,17 @@ class VercelStorageResponseListdir:
     }
     """
 
-    hasMore = bool
-    blobs = List[VercelStorageContent]
+    hasMore: bool
+    blobs: list[VercelStorageContent]
 
-    def __init__(self, data_dict):
+    def __init__(self, data_dict: dict):
         self.hasMore = data_dict.get("hasMore", False)
         self.blobs = [VercelStorageContent(blob) for blob in data_dict.get("blobs", [])]
 
 
 class VercelStorage(BaseStorage):
 
-    CHUNK_SIZE = 4 * 1024 * 1024
+    CHUNK_SIZE: int = 4 * 1024 * 1024
 
     def __init__(self, **settings):
         super().__init__(**settings)
@@ -73,20 +75,24 @@ class VercelStorage(BaseStorage):
         self.client = blob
         self.options = settings
         self.options["token"] = blob.get_token(self.options)
+        self.options["no_suffix"] = True
 
-    def _save(self, name, content):
+    def _save(self, name, content: File) -> str:
         # Save a file to Vercel storage
         name = self.get_available_name(name)
-        _content = content.read()
-        if len(_content.size) <= self.CHUNK_SIZE:
-            self.client.put(name, _content, options=self.options)
+        if len(content) <= self.CHUNK_SIZE:
+            self.client.put(name, content.read(), options=self.options)
         else:
             self._chunked_upload(content, name)
         return name
 
-    def _chunked_upload(self, content: File, name: str):
+    def _chunked_upload(self, content: File, name: str) -> None:
         # Upload a file to Vercel storage in chunks
         raise NotImplementedError("Chunked upload is not supported")
+
+    def _open(self, name, mode="rb"):
+        # Open a file from Vercel storage
+        return VercelStorageFile(name, mode, self)
 
     def listdir(self, path: str = "") -> VercelStorageResponseListdir:
         # List directories and files under a path in Vercel storage
@@ -100,14 +106,14 @@ class VercelStorage(BaseStorage):
     def exists(self, name: str) -> bool:
         # Check if a file exists in Vercel storage
         _list_content = self.listdir()
-        _blobs = cast(list, _list_content.blobs)
+        _blobs = _list_content.blobs
         _dict_content = {content.pathname: content for content in _blobs}
         return name in _dict_content.keys()
 
     def get_content(self, name: str) -> VercelStorageContent:
         # Get the content of a file in Vercel storage
         _list_content = self.listdir()
-        _blobs = cast(list, _list_content.blobs)
+        _blobs = _list_content.blobs
         _dict_content = {content.pathname: content for content in _blobs}
         if name not in _dict_content.keys():
             raise ImproperlyConfigured(f"File {name} does not exist")
@@ -116,20 +122,20 @@ class VercelStorage(BaseStorage):
     def size(self, name: str) -> int:
         # Get the size of a file in Vercel storage
         content = self.get_content(name)
-        return cast(int, content.size)
+        return content.size
 
     def url(self, name: str) -> str:
         # Get the URL of a file in Vercel storage
         _content = self.get_content(name)
-        return cast(str, _content.url)
+        return _content.url
 
-    def delete(self, name):
+    def delete(self, name) -> None:
         # Delete a file from Vercel storage
         _url = self.url(name)
         self.client.delete(_url, options=self.options)
 
-    def get_blob(self, name):
-        # Get the file blob from Vercel storage
+    def get_byte(self, name) -> bytes:
+        # Get the byte content of a file in Vercel storage
         url = self.url(name)
         _res = requests.get(url)
         if _res.status_code != 200:
@@ -138,28 +144,32 @@ class VercelStorage(BaseStorage):
 
 
 class VercelStorageFile(File):
-    name = str
-    _storage = BaseStorage
-    _mode = str
-    _is_dirty = bool
-    file = io.BytesIO
-    _is_read = bool
+    name: str
+    size: int
+    file: io.BytesIO
+    closed: bool
+    _mode: Literal["wb", "rb"]
+    _is_dirty: bool
+    _is_read: bool
+    _storage: VercelStorage
 
-    def __init__(self, name: str, mode: str, storage: VercelStorage):
+    def __init__(
+        self,
+        name: str,
+        mode: Literal["wb", "rb"],
+        storage: VercelStorage,
+        blob: bytes | None = None,
+    ):
         self.name = name
         self._storage = storage
         self._mode = mode
-        self.blob = self._storage.get_blob(name)
+        print("blob", blob)
+        self.blob = self._storage.get_byte(name) if blob is None else blob
+        self.size = len(self.blob)
+        print("self.blob", self.blob)
         self.file = io.BytesIO(self.blob)
 
-    def size(self) -> int:
-        return self._storage.size(self.name)
-
     def read(self, num_bytes=None):
-        if not self._is_read:
-            self.file = self._storage._read(self.name)
-            self._is_read = True
-
         return self.file.read(num_bytes)
 
     def write(self, content):
@@ -173,7 +183,9 @@ class VercelStorageFile(File):
         if not self.closed:
             self.seek(0)
         elif self.name and self._storage.exists(self.name):
-            self.file = self._storage._open(self.name, mode or self.mode)
+            _file_blob = self._storage.get_byte(self.name)
+            self.file = io.BytesIO(_file_blob)
+            self._is_read = True
         else:
             raise ValueError("The file cannot be reopened.")
 
